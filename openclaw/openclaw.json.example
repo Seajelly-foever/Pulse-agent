@@ -1,0 +1,27 @@
+{
+  "channels": {
+    "feishu": {
+      "enabled": true,
+      "domain": "feishu",
+      "connectionMode": "websocket",
+      "dmPolicy": "allowlist",
+      "allowFrom": ["YOUR_FEISHU_OPEN_ID"],
+      "groupPolicy": "allowlist",
+      "requireMention": true
+    }
+  },
+  "session": { "dmScope": "per-channel-peer" },
+  "plugins": {
+    "load": { "paths": ["/plugins/pulse-bridge"] },
+    "entries": {
+      "pulse-bridge": {
+        "enabled": true,
+        "hooks": { "allowConversationAccess": true, "timeoutMs": 120000 },
+        "config": {
+          "gatewayUrl": "http://gateway:8789",
+          "bridgeSecretEnv": "OPENCLAW_BRIDGE_SECRET"
+        }
+      }
+    }
+  }
+}

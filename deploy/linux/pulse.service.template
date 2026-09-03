@@ -1,0 +1,24 @@
+[Unit]
+Description=Pulse Personal Agent
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=__PULSE_UID__
+Group=__PULSE_GID__
+WorkingDirectory=__PULSE_APP_DIR__
+EnvironmentFile=/etc/pulse/pulse.env
+Environment=HOME=__PULSE_HOME__
+Environment=PATH=__PULSE_HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=__NODE_BIN__ scripts/start-production-agent.mjs
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

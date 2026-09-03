@@ -1,0 +1,14 @@
+{
+  "id": "pulse-bridge",
+  "name": "Pulse Agent Bridge",
+  "description": "Route Feishu turns to the Pulse DeepSeek Harness runtime.",
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "gatewayUrl": { "type": "string" },
+      "bridgeSecretEnv": { "type": "string" }
+    }
+  }
+}

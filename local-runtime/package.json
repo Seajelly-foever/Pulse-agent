@@ -1,0 +1,1 @@
+{"name":"pulse-local-gateway","version":"0.1.0","private":true,"type":"module","engines":{"node":">=22.13.0"},"scripts":{"start":"node src/server.mjs","test":"node --test test/*.test.mjs","pair":"node src/cli.mjs pairing approve"},"dependencies":{"@larksuiteoapi/node-sdk":"^1.57.0"}}

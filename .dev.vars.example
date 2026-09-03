@@ -1,0 +1,14 @@
+FEISHU_APP_ID=cli_xxx
+FEISHU_APP_SECRET=xxx
+FEISHU_VERIFICATION_TOKEN=xxx
+FEISHU_DEFAULT_PROJECT_ID=
+
+# OpenAI-compatible Chat Completions API；未配置时使用结构化降级
+LLM_API_KEY=
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_MODEL=gpt-5-mini
+
+# DeepSeek Harness 独立 Agent Runtime
+HARNESS_API_URL=
+HARNESS_SHARED_SECRET=
+HARNESS_MODEL=deepseek-v3.2

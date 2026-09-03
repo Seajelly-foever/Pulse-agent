@@ -1,0 +1,11 @@
+import { writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+const gatewayUrl=process.env.LOCAL_GATEWAY_URL||"http://127.0.0.1:8789";
+const gatewaySecret=process.env.LOCAL_GATEWAY_SECRET;
+if(!gatewaySecret)throw new Error("LOCAL_GATEWAY_SECRET is required");
+writeFileSync(".dev.vars",`LOCAL_GATEWAY_URL=${gatewayUrl}\nLOCAL_GATEWAY_SECRET=${gatewaySecret}\n`,{mode:0o600});
+const packageCli=process.env.npm_execpath;
+const child=packageCli?spawn(process.execPath,[packageCli,"run","dev","--","--host","0.0.0.0"],{stdio:"inherit"}):spawn(process.env.PNPM_BIN||"pnpm",["run","dev","--","--host","0.0.0.0"],{stdio:"inherit"});
+child.on("error",(error)=>{console.error(`无法启动前端：${error.message}`);process.exitCode=1;});
+child.on("exit",(code)=>{process.exitCode=code??1;});
+for(const signal of ["SIGINT","SIGTERM"])process.on(signal,()=>child.kill(signal));

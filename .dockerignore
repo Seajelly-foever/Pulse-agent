@@ -1,0 +1,17 @@
+.git
+.env*
+!.env.local-agent.example
+.dev.vars*
+node_modules
+dist
+.vinext
+.wrangler
+local-runtime/data
+harness-service/data
+harness-service/harness-service/data
+harness-service/.venv
+openclaw/state
+outputs
+work
+coverage
+*.log

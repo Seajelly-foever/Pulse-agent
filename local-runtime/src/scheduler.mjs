@@ -1,0 +1,30 @@
+import { nextScheduledOccurrence } from "./schedule.mjs";
+
+export function startMaintenanceScheduler({agent,store,docWriter,sendMessage=null,backfillGroupHistory=null,config,log=console}){
+  let memoryRunning=false,lastMemoryDate="",skillRunning=false,lastSkillDate="",groupRunning=false,tasksRunning=false;
+  const memoryTick=async()=>{if(!config.monthlyMemoryEnabled)return;const parts=localParts(new Date(),config.timezone);if(parts.day!==config.monthlyMemoryDay||parts.hour!==config.monthlyMemoryHour||lastMemoryDate===parts.date||memoryRunning)return;memoryRunning=true;try{await agent.reviewMonthlyMemory();lastMemoryDate=parts.date;log.info(`[memory-curator] monthly review completed ${parts.date}`);}catch(error){log.error("[memory-curator] monthly review failed",error);}finally{memoryRunning=false;}};
+  const skillTick=async()=>{if(!config.skillEvolutionEnabled)return;const parts=localParts(new Date(),config.timezone);if(parts.weekday!==config.skillEvolutionDay||parts.hour!==config.skillEvolutionHour||lastSkillDate===parts.date||skillRunning)return;skillRunning=true;try{await agent.reviewSkillsForEvolution();lastSkillDate=parts.date;log.info(`[skill-curator] weekly review completed ${parts.date}`);}catch(error){log.error("[skill-curator] weekly review failed",error);}finally{skillRunning=false;}};
+  const groupTick=async()=>{if(!config.groupSyncEnabled||groupRunning)return;groupRunning=true;try{await runDueGroupSyncs({agent,store,docWriter,backfillGroupHistory,config,log});}finally{groupRunning=false;}};
+  const taskTick=async()=>{if(config.scheduledTasksEnabled===false||tasksRunning)return;tasksRunning=true;try{await runDueScheduledTasks({agent,store,sendMessage,backfillGroupHistory,config,log});}finally{tasksRunning=false;}};
+  const timer=setInterval(()=>{void memoryTick();void skillTick();void groupTick();void taskTick();},30000);timer.unref?.();void memoryTick();void skillTick();void groupTick();void taskTick();return{stop(){clearInterval(timer);}};
+}
+
+export async function runDueScheduledTasks({agent,store,sendMessage,backfillGroupHistory=null,config,log=console,nowDate=new Date()}){
+  const results=[];for(const task of store.dueScheduledTasks(nowDate.toISOString())){
+    const nextRunAt=task.schedule?.type==="once"?null:nextScheduledOccurrence(task.schedule,nowDate,config.timezone),claimed=store.claimScheduledTask(task.id,{claimedAt:nowDate.toISOString(),nextRunAt});if(!claimed)continue;
+    try{if(typeof sendMessage!=="function")throw new Error("当前飞书通道不支持主动发送消息");let historySync=null;if(claimed.scope_type==="group"&&backfillGroupHistory)try{historySync=await backfillGroupHistory({chatId:claimed.scope_id});}catch(error){log.warn?.(`[scheduled-task] ${claimed.id} history backfill failed: ${error instanceof Error?error.message:String(error)}`);}const generated=await agent.runScheduledTask(claimed),answer=String(generated?.answer||generated?.content||generated?.summary||"任务已执行，但没有可发送内容").trim(),content=`### ${claimed.name}\n\n${answer}`;await sendMessage({chatId:claimed.delivery_type==="group"?claimed.delivery_id:null,userId:claimed.delivery_type==="private"?claimed.delivery_id:null,content,taskName:claimed.name,skill:claimed.skill_name,model:generated?.model||generated?.engine,idempotencyKey:`pulse-${claimed.id}-${nowDate.toISOString().slice(0,16)}`});store.finishScheduledTask(claimed.id,{output:answer});store.touchCapability("scheduled-task");results.push({taskId:claimed.id,status:"completed",deliveryType:claimed.delivery_type,nextRunAt,historySync});log.info(`[scheduled-task] ${claimed.id} delivered to ${claimed.delivery_type}`);
+    }catch(error){const message=error instanceof Error?error.message:"定时任务执行失败";store.finishScheduledTask(claimed.id,{error:message});results.push({taskId:claimed.id,status:"failed",error:message,nextRunAt});log.error(`[scheduled-task] ${claimed.id} failed`,message);}
+  }return results;
+}
+
+export async function runDueGroupSyncs({agent,store,docWriter,backfillGroupHistory=null,config,log=console,force=false}){
+  const intervalMs=Math.max(5,Number(config.groupSyncIntervalMinutes)||30)*60000,minMessages=Math.max(1,Number(config.groupSyncMinMessages)||1),results=[];
+  for(const sync of store.groupSyncOverview()){
+    const due=force||!sync.last_summarized_at||Date.now()-new Date(sync.last_summarized_at).getTime()>=intervalMs;
+    if(!sync.enabled||!due)continue;let historySync=null;if(backfillGroupHistory)try{historySync=await backfillGroupHistory({chatId:sync.chat_id});}catch(error){log.warn?.(`[group-sync] ${sync.chat_id} history backfill failed: ${error instanceof Error?error.message:String(error)}`);}const evidence=store.groupSyncEvidence(sync.chat_id);if(!evidence.messages.length||!force&&evidence.messages.length<minMessages)continue;
+    try{const generated=await agent.summarizeGroup({chatId:sync.chat_id,messages:evidence.messages}),document=await docWriter.writeGroupSummary({chatId:sync.chat_id,docUrl:sync.output_doc_url,summary:generated.summary});store.finishGroupSync(sync.chat_id,{summary:generated.summary,docUrl:document.url,documentId:document.documentId});results.push({chatId:sync.chat_id,status:"completed",messageCount:evidence.messages.length,docUrl:document.url,historySync});log.info(`[group-sync] ${sync.chat_id} summarized ${evidence.messages.length} messages`);}catch(error){const message=error instanceof Error?error.message:"群聊同步失败";store.failGroupSync(sync.chat_id,message);results.push({chatId:sync.chat_id,status:"failed",error:message,historySync});log.error(`[group-sync] ${sync.chat_id} failed`,message);}
+  }
+  return results;
+}
+
+function localParts(date,timeZone){const parts=new Intl.DateTimeFormat("en-CA",{timeZone,weekday:"short",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",hourCycle:"h23"}).formatToParts(date).reduce((out,item)=>{out[item.type]=item.value;return out;},{});const weekdays={Sun:0,Mon:1,Tue:2,Wed:3,Thu:4,Fri:5,Sat:6};return{weekday:weekdays[parts.weekday],day:Number(parts.day),hour:Number(parts.hour),date:`${parts.year}-${parts.month}-${parts.day}`};}

@@ -1,0 +1,67 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.local-web
+    environment:
+      LOCAL_GATEWAY_URL: http://gateway:8789
+      LOCAL_GATEWAY_SECRET: ${LOCAL_GATEWAY_SECRET}
+    ports:
+      - "3000:3000"
+    depends_on:
+      gateway:
+        condition: service_healthy
+  gateway:
+    build: ./local-runtime
+    env_file: .env.local-agent
+    environment:
+      GATEWAY_HOST: 0.0.0.0
+      GATEWAY_PORT: 8789
+      PULSE_DATABASE_PATH: /data/pulse.db
+      HARNESS_API_URL: http://harness:8080
+    volumes:
+      - pulse_data:/data
+    ports:
+      - "127.0.0.1:8789:8789"
+    healthcheck:
+      test: ["CMD","node","-e","fetch('http://127.0.0.1:8789/health').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  harness:
+    build: ./harness-service
+    env_file: .env.local-agent
+    environment:
+      DSH_SESSION_ROOT: /data/sessions
+    volumes:
+      - harness_sessions:/data/sessions
+    ports:
+      - "127.0.0.1:8090:8080"
+  openclaw-gateway:
+    profiles: ["openclaw"]
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
+    env_file: .env.local-agent
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      PULSE_GATEWAY_URL: http://gateway:8789
+      OPENCLAW_DISABLE_BONJOUR: "1"
+    volumes:
+      - ./openclaw/state:/home/node/.openclaw
+      - ./integrations/openclaw-pulse:/plugins/pulse-bridge:ro
+    ports:
+      - "127.0.0.1:18789:18789"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    cap_drop: ["NET_RAW", "NET_ADMIN"]
+    security_opt: ["no-new-privileges:true"]
+    init: true
+    restart: unless-stopped
+    command: ["node","dist/index.js","gateway","--bind","lan","--port","18789"]
+volumes:
+  pulse_data:
+  harness_sessions:

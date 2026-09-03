@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "snapshotDate": "2026-08-28",
+  "policy": "downloaded-and-disabled-until-reviewed",
+  "plugins": [
+    {
+      "name": "dsh-agent-teams",
+      "repository": "https://github.com/nanmicoder/dsh-agent-teams.git",
+      "commit": "5fe388f1a30da7b1374294b25bd6f8ad74ab6aa5",
+      "version": "0.1.14",
+      "license": "MIT",
+      "status": "disabled",
+      "reason": "需要比 Pulse 当前 0.1.1rc1 更新的 DeepSeek Harness SDK"
+    },
+    {
+      "name": "modlens",
+      "repository": "https://github.com/liustack/ModLens.git",
+      "commit": "147356e6dde04c69a6a3eeb95d1e21ffeb057d6c",
+      "version": "3.25.2",
+      "license": "MIT",
+      "status": "disabled",
+      "reason": "需要额外视觉运行时、模型凭证与数据授权"
+    },
+    {
+      "name": "dsh-mnemon",
+      "repository": "https://github.com/omdsh-dev/dsh-mnemon.git",
+      "commit": "82e586d9cc9592a9c972c7f555d40505d1517bff",
+      "version": "0.3.5",
+      "license": "MIT",
+      "status": "disabled",
+      "reason": "需要先与 Pulse 的 Memory 和画像候选机制做去重与迁移验证"
+    }
+  ]
+}
