@@ -1,149 +1,325 @@
 # Pulse Personal Agent
 
-Pulse 是一个本地优先、可自行访问、可迁移云端的个人管理 Agent。它以项目管理为第一个完整模块，同时统一处理飞书消息、文档、行动、搜索、汇报、Skill 和长期记忆。
+> 不是要求人维护另一套项目系统，而是让 Agent 从工作中本来就存在的文档、群聊和对话里提取事实，并把 Todo、进展与周报变成自然产物。
 
-当前代码已经从单体“项目 Bot”升级为五层架构：可替换飞书通信边缘、Pulse 业务编排、DeepSeek Harness 推理循环、受控 Tool Runtime、Hermes-inspired Memory 与 Claude-compatible Skill Registry。通信层同时支持飞书官方 SDK、飞书 CLI 和可选 OpenClaw；公司环境不允许 OpenClaw 时不影响任何核心能力。完整边界与数据流见 [Agent 架构说明](./docs/AGENT_ARCHITECTURE.md)。
+[![License: MIT](https://img.shields.io/badge/License-MIT-17131a.svg)](./LICENSE)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.13-0b5fbf.svg)](./package.json)
+[![Feishu](https://img.shields.io/badge/Channel-Feishu-3370ff.svg)](./LOCAL_SETUP.md)
+[![DeepSeek Harness](https://img.shields.io/badge/Agent-DeepSeek%20Harness-d81e4a.svg)](./docs/AGENT_ARCHITECTURE.md)
 
-## Skill 自进化
+Pulse 是一个本地优先、可以部署到 Linux 服务器的个人生活与工作管理 Agent。项目管理是第一个完整业务模块，但不是系统边界；普通问答、文档理解、群聊总结、任务拆解、周报生成、定时任务、搜索、Skill 与长期记忆共用同一套 Agent Runtime。
 
-Pulse 同时支持人工触发与定时触发的 Skill 优化。`skill-curator` 只读取已发布 Skill、真实运行证据和用户明确指定的材料，通过受控工具生成候选版本并写入管理后台草稿箱。候选需要经过规则评测和人工审核后才能发布，模型无权直接覆盖生产版本、修改插件配置或扩大自身工具权限。
+## 为什么是 Pulse
 
-这套边界将“从证据中提炼可复用方法”交给模型，将版本存储、权限校验、评测、发布和回滚交给确定性工程服务。相关行为可以通过 `SKILL_EVOLUTION_ENABLED` 等环境变量控制，详细配置见 [本地运行说明](./LOCAL_SETUP.md)。
+传统项目工具要求人先建项目、拆需求、填负责人和排期，周五再把字段人工组织成汇报。系统只负责存储，理解和维护成本仍然在人身上。
 
-## 当前推荐：本地 Personal Agent
-
-当前默认链路为 `飞书 → lark-cli → Pulse Gateway → DeepSeek Harness / Tool Runtime → SQLite → Web`。CLI 使用 `event consume` 接收消息、`docs +fetch` 读取用户投递的 Wiki / Docx、`im +messages-reply` 回复，并复用本机 Bot 配置。陌生 open_id 仍需六位配对码授权；官方 SDK 与 OpenClaw 只保留为回滚适配器，不会与 CLI 同时消费消息。
-
-完整配置与启动步骤见 [LOCAL_SETUP.md](./LOCAL_SETUP.md)。本地运行不需要公网回调地址；没有模型密钥时仍可使用结构化降级整理，但不会伪装成真实模型结果。
-
-第一次从虚拟机、飞书 Bot 和 DeepSeek API 开始部署，请直接阅读[从零部署教程](./docs/DEPLOYMENT_TUTORIAL.md)。
-
-个人工作台位于 `http://localhost:3000`，普通文字和文档链接共用一个入口。控制中台位于 `http://localhost:3000/control`，提供模型路由与完整输入输出日志、插件库、Skill 编辑/评测/发布/回滚、持久化定时任务、每周 Memory 候选审批以及工具调用审计。API Key 只保存在环境变量中；数据库仅保存环境变量名称，运行日志会脱敏常见凭证字段。
-
-在任意已启用群中，成员可以直接 `@Alex` 用自然语言创建任务，例如“每天晚上 9 点私聊我当天项目进度总结”或“每周五 18:00 在本群发送风险回顾”。任务按群和创建人隔离，服务器重启后仍会保留；创建、查询、暂停、恢复和删除均通过 `scheduled-task` Skill 的受控工具完成，并记录模型、工具与投递结果。
-
-群聊上下文由两条链路合并：事件流持续保存 Bot 加入后的新消息；当用户询问历史、总结讨论、评价某人发言、手动同步或执行群定时任务时，Pulse 优先使用已授权飞书用户身份补采当前群最近的历史消息，权限不足时回退到群内 Bot 身份，并去重入库。默认读取最近 10 页（最多约 500 条），可用 `PULSE_GROUP_HISTORY_PAGE_LIMIT` 在 1–20 页之间调整；身份策略可用 `LARK_GROUP_HISTORY_IDENTITY=auto|user|bot` 控制。历史记录严格按 `chat_id` 隔离，不会跨群进入 Agent 上下文。
-
-## 云端原型旧链路
-
-Web 端与飞书 Bot 最终写入同一个 Sites 托管 D1 数据库，运行时绑定名为 `DB`。浏览器不会直接连接数据库，所有读写都经过 `/api/*` 服务端接口。
-
-飞书同步链路：用户把 Wiki / Docx 链接发给 Bot → 飞书推送 `im.message.receive_v1` 到 `/api/integrations/feishu/events` → 服务端使用 `tenant_access_token` 解析 Wiki 节点并读取 Docx 纯文本 → 链接、正文、同步状态与消息来源写入 `assets.metadata_json` → 搜索和汇报读取同一份数据。事件 ID 会写入 `integration_events`，避免飞书重试造成重复同步。
-
-汇报链路：`POST /api/reports` 聚合项目状态、Owner、进度、下一步、最近 20 条更新和最多 8 份已抽取文档。配置 `LLM_API_KEY` 后交给 OpenAI-compatible API 在事实约束下改写；没有密钥或模型暂时不可用时使用结构化模板降级。结果、引擎和证据数量会一起保存在 `reports`。
-
-## 飞书连接配置
-
-1. 在飞书开放平台创建企业自建应用并启用机器人。
-2. 配置 `FEISHU_APP_ID`、`FEISHU_APP_SECRET` 和 `FEISHU_VERIFICATION_TOKEN`。
-3. 开通消息读取、知识库只读和 Docx 文档只读权限，并确保 Bot 对目标文档有访问权。
-4. 订阅 `im.message.receive_v1`，请求地址使用资料页展示的 Webhook 地址。
-5. 当前端点按非加密事件推送实现；如果开启 Encrypt Key，需要先增加事件解密。
-
-本地开发可复制 `.dev.vars.example` 为 `.dev.vars`。生产环境在 Sites 项目的环境变量中配置相同键名，真实 Secret 不应提交到仓库。
-
-## 信息架构
-
-1. **同步台**：只呈现新增变化、阻塞、待确认事项；选中项目后在同屏展示 Owner、节奏、下一步和证据文档。
-2. **项目矩阵**：沿用“核心工作 → 子项目 → Owner → 周节奏”的业务结构，支持跨周查看与状态扫描。
-3. **统一搜索**：按项目、Owner、实验、指标、决策和文档正文检索，并生成跨来源整合答案。
-4. **相关资料**：将项目进展、产品方案、实验文档、数据看板与项目实体关联，而不是作为孤立附件。
-5. **智能汇报**：双日会简报、管理层周报、项目专项汇报和风险决策摘要。
-
-## 系统架构
+Pulse 反过来工作：你提供一段自然语言、一份飞书文档或一段群聊，Agent 负责判断它是否属于项目，识别已有项目，拆分可独立验收的需求，把复合事项变成单人单交付的原子 Todo，并保留来源。用户只确认材料里确实不明确的内容。
 
 ```text
-飞书消息 / 文档 / 表格 / Web 管理端
-                  │
-          Ingestion Adapter
-     事件验签 · 去重 · 身份映射 · 原文归档
-                  │
-              Event Queue
-                  │
-       Project Intelligence Service
- 抽取更新 · 合并状态 · 风险识别 · 指标判断 · 节奏对齐
-                  │
- Search Index + Skill Runtime + LLM Gateway
- 标题/正文/实体索引 · 权限过滤 · 混合召回 · 答案引用
- 模板版本 · 检索上下文 · 生成 · 评审 · 可观测
-                  │
-       API / Web Application Layer
-                  │
-       D1(SQLite) + Object Storage
+传统方式：人理解现实 → 人维护结构 → 系统存储 → 人再次整理周报
+Pulse：   人提供材料 → Agent 理解与提炼 → 工程服务可靠写入 → 人确认结果
 ```
 
-建议生产环境将模型厂商封装在 LLM Gateway 后，Skill 只描述输入、输出、提示模板、质量标准和允许调用的工具。自适应更新采用“生成候选版本 → 离线评测 → 管理员确认 → 灰度发布”，不允许模型直接覆盖线上 Skill。
+这决定了 Pulse 的核心原则：**需要理解和判断的交给 Skill，需要准确执行和保存的交给 Tool 与工程服务，需要展示和交互的交给 UI。**
 
-## 数据模型
+## 完整架构
 
-核心表定义位于 `db/schema.ts`：
+[![Pulse Agent 完整数据流转架构](./docs/assets/pulse-agent-architecture.png)](./docs/assets/pulse-agent-architecture.png)
 
-- `users`：账号、显示名、飞书 open_id、角色。
-- `projects`：项目状态、健康度、进度、预期、负责人和配置。
-- `project_updates`：原始同步内容、AI 摘要、进度变化、同步人。
-- `metrics`：指标值、目标、单位、状态和观测时间。
-- `risks`：风险等级、状态、负责人和截止日期。
-- `assets`：项目/实验/看板链接及其创建人。
-- `skill_definitions`：Skill 版本、提示模板、配置和生命周期。
-- `reports`：报告类型、内容、生成范围、模型和生成人。
-- `integrations`：飞书与其他外部连接的状态和安全引用。
+> 从左到右是入口、接入与准备、决策、执行和存储；底部是回复与记忆回流。点击图片可查看完整尺寸。
 
-生产版可继续增加 `project_members`、`milestones`、`skill_runs`、`skill_evaluations`、`audit_logs` 和 `webhook_events`。
+<details>
+<summary>查看可检索的 Mermaid 结构图</summary>
 
-## MVP 范围
+```mermaid
+flowchart LR
+    subgraph Input[入口]
+        Feishu[飞书群聊 / 私聊]
+        Web[网页对话]
+        Doc[文档链接]
+        Timer[定时任务]
+    end
 
-本原型已经覆盖：
+    subgraph Gateway[Pulse Gateway · 8789]
+        Dedupe[事件去重]
+        Session[会话定位]
+        Snapshot[冻结记忆快照]
+        Queue[排队与并发控制]
+    end
 
-- 高级极简的响应式管理端与六个主模块。
-- 项目组合、健康度、核心关注、风险、指标摘要。
-- 四类汇报配置与服务端生成接口示例。
-- Skill 管理、自适应建议的审核式交互。
-- 人员归属、更新记录和资料链接管理界面。
-- D1 持久化模型与可部署的 Cloudflare Worker 构建。
+    subgraph Decision[决策]
+        Router[Skill Router]
+        Gate{项目写入闸门}
+        General[通用问答]
+    end
 
-正式上线的下一阶段：
+    subgraph Execution[ReAct 执行循环 · 最多 6 轮]
+        Harness[DeepSeek Harness · 8090]
+        Tools[Tool Runtime<br/>角色白名单 · 权限校验]
+        Delegate[子 Agent 委派]
+        Harness <--> Tools
+        Tools --> Delegate
+    end
 
-- 飞书应用发布、消息卡片、OAuth/租户安装与加密事件解密。
-- 模型流式生成、引用跳转和质量评测。
-- 完整 CRUD、行级权限、审计日志、加密密钥和对象存储。
-- 后台任务队列、Webhook 幂等、失败重试、监控告警。
-- 文档增量抓取、分块索引、向量与关键词混合检索、结果权限裁剪和答案引用。
+    subgraph Store[存储与审计]
+        Knowledge[项目知识库<br/>Project → Requirement → Atomic Todo]
+        Memory[Hermes Memory<br/>Session · USER.md · MEMORY.md]
+        Audit[审计轨迹<br/>模型 · 工具 · 父子 Agent]
+    end
 
-## 仅启动前端开发模式
+    Feishu --> Dedupe
+    Web --> Dedupe
+    Doc --> Dedupe
+    Timer --> Dedupe
+    Dedupe --> Session --> Snapshot --> Queue --> Router --> Gate
+    Gate -- 证据通过 --> Harness
+    Gate -- 证据不足 --> General
+    Tools <--> Knowledge
+    Tools <--> Memory
+    Tools --> Audit
+    Memory -. 会话启动时冻结注入 .-> Snapshot
+    Harness --> Feishu
+    Harness --> Web
+```
 
-要求 Node.js 22.13+。
+</details>
+
+一条消息进入系统后，会依次经历八个阶段：
+
+1. **接收与去重**：按消息 ID 幂等入库，飞书重复推送不会造成重复回复。
+2. **会话定位**：每个群聊和私聊拥有独立 Session，上下文不会跨会话污染。
+3. **记忆快照**：会话开始时冻结用户画像与长期事实，本轮推理中途不会被改写。
+4. **Skill 路由**：模型只判断意图、能力和执行计划，不在规划阶段写数据。
+5. **项目闸门**：即使模型认为请求与项目有关，代码仍会验证项目名和用户原文证据；证据不足就退回通用能力。
+6. **ReAct 循环**：Harness 在“思考—调用工具—观察结果”之间循环，工具范围由当前角色限定。
+7. **确定性落库**：项目、需求和 Todo 通过受控服务去重、更新、软删除和持久化。
+8. **回复与沉淀**：结果返回原会话；记忆和 Skill 只能生成候选，必须经过人工发布。
+
+## Skill、Tool 与基础设施
+
+| 层 | 负责什么 | Pulse 中的例子 |
+| --- | --- | --- |
+| **Skill** | 如何理解和处理一类问题 | 判断项目、拆 Requirement、提取原子 Todo、写周报 |
+| **Tool** | Agent 可以申请执行什么动作 | `sync_project`、`session_search`、`web_search` |
+| **Infrastructure** | 如何可靠运行和保存 | SQLite、权限、事务、索引、幂等、审计 |
+| **UI** | 如何向人呈现和操作 | 任务看板、日志、Skill 草稿箱、Memory 审批 |
+
+Skill 采用兼容 Claude Agent Skill 的 YAML Frontmatter 与 Markdown 正文。发布版本才会进入 Agent 路由；人工创建、代码同步或 Skill Curator 生成的版本都会先进入草稿箱，经过评测和人工审核后才能生效。
+
+### Skill 自进化
+
+`skill-curator` 可以读取已发布 Skill、真实运行证据和用户明确指定的材料，生成改进候选：
+
+```text
+真实运行证据 / 指定材料
+            ↓
+      Skill Curator 分析
+            ↓
+      候选版本 + 规则评测
+            ↓
+        管理后台草稿箱
+            ↓
+        管理员审核发布
+```
+
+模型不能直接发布 Skill、覆盖生产版本、修改插件配置或扩大自身权限。启用前需要明确允许相应运行证据发送给当前模型服务；配置方法见[部署教程](./docs/DEPLOYMENT_TUTORIAL.md#10-启用-skill-自进化)。
+
+## 角色与最小权限
+
+同一个模型在不同阶段使用不同角色。角色对应代码中的固定工具白名单，模型无法直接接触数据库。
+
+| 角色 | 职责 | 主要可用工具 |
+| --- | --- | --- |
+| `skill-router` | 识别意图并生成执行计划 | 无写权限 |
+| `personal-agent` | 通用问答、个人事项与检索 | Session、Memory、工作区、群聊和网页检索 |
+| `project-manager` | 项目、需求和 Todo 同步 | 项目召回、群聊检索、`sync_project` |
+| `report-writer` | 根据项目证据生成周报 | `project_knowledge_recall` |
+| `scheduler-manager` | 创建和管理定时任务 | 创建、查询、暂停、恢复和删除定时任务 |
+| `memory-curator` | 月度长期记忆审阅 | 检索证据并写入记忆候选 |
+
+`report-writer` 被刻意限制为只能召回项目知识，避免把普通搜索结果或模型印象写进正式周报。每次模型调用、上下文注入、工具入参、工具返回、耗时、错误和子 Agent 链路都会进入审计记录，可在管理后台逐轮回放。
+
+## 记忆与项目知识
+
+Pulse 把个人记忆和项目知识分成两个系统。
+
+**Hermes Memory** 保存人与 Agent 之间相对稳定的上下文：
+
+- `Session`：每个群聊或私聊的临时上下文。
+- `USER.md`：稳定的用户偏好与画像。
+- `MEMORY.md`：已经确认的长期事实和目标。
+- `session_search`：需要跨会话追溯时由 Agent 显式调用。
+- Memory Curator：按月从真实证据中生成候选，人工确认后进入下一周期。
+
+**项目知识库** 保存可追溯的业务事实：
+
+- 项目与业务需求；
+- 子需求进展、风险与下一步；
+- 原子 Todo、负责人和截止时间；
+- 关联人物、群聊证据和飞书文档链接。
+
+生成周报时，Agent 按项目调用 `project_knowledge_recall`。项目流水不会污染长期用户记忆，长期记忆也不能替代项目证据。
+
+## 项目数据模型
+
+所有项目事实收敛为三层结构：
+
+| 层级 | 定义 | 拆分标准 |
+| --- | --- | --- |
+| **Project** | 持续推进、具有明确交付目标的业务对象 | 优先匹配已有项目，避免创建近义项目 |
+| **Requirement** | 可以独立推进和验收的一块工作 | 交付物、团队或上线批次不同就拆开 |
+| **Atomic Todo** | 最小可执行单元 | 一个动作、一个结果、一个负责人、一个截止时间 |
+
+语义理解由项目 Skill 完成，数据库写入、状态更新、软删除、时间筛选、权限和历史版本由 Task Service 确定性执行。不同入口最终进入同一条链路：
+
+```text
+飞书 / Web / 文档 / 群聊 / 定时任务
+                  ↓
+         Project Management Skill
+                  ↓
+             Structured JSON
+                  ↓
+          Task Service + Database
+                  ↓
+              Task Board
+```
+
+## 不可信数据边界
+
+飞书文档正文、群聊消息和网页结果全部被视为不可信材料，不能覆盖系统提示词、Skill 规则或工具权限。系统通过三层约束降低提示词注入和误写风险：
+
+1. 外部内容进入上下文时会被明确标记为不可信数据；
+2. Skill 规定文档中的命令不能被当作系统指令执行；
+3. 项目写入闸门要求项目名和关键证据可以在用户输入或已确认项目索引中验证。
+
+原则是：**宁可标记“待确认”，也不根据文档中的未知指令猜测或写入。**
+
+## 飞书通信
+
+默认链路是：
+
+```text
+飞书 → lark-cli → Pulse Gateway → Harness / Tool Runtime → SQLite → 飞书回复
+```
+
+`lark-cli` 负责长连接接收 `im.message.receive_v1`、读取用户授权的文档与群聊历史、回复消息和添加处理中表情。Gateway 负责身份配对、群成员权限、幂等、会话队列和业务编排。官方 SDK 与 OpenClaw 仅保留为可选适配器，不能和 CLI 同时消费同一个 Bot。
+
+群聊历史严格按 `chat_id` 隔离。事件流持续保存 Bot 加入后的新消息；需要总结历史、评价发言或生成项目周报时，系统会使用已授权用户身份补采当前群历史，权限不足时回退到群内 Bot 可见范围。
+
+## 快速开始
+
+### 环境要求
+
+- Node.js `22.13+`
+- pnpm `11`
+- Python `3.10+`
+- Git、curl、Python venv
+- 飞书企业自建应用
+- DeepSeek API Key
+
+### 本地运行
 
 ```bash
-pnpm install
-pnpm dev
+git clone https://github.com/Seajelly-foever/Pulse-agent.git pulse
+cd pulse
+
+pnpm install --frozen-lockfile
+cp .env.local-agent.example .env.local-agent
+# 编辑 .env.local-agent，填写飞书与模型凭证
+
+python3 -m venv harness-service/.venv
+harness-service/.venv/bin/python -m pip install \
+  --disable-pip-version-check \
+  -r harness-service/requirements.txt
+
+pnpm local:up
 ```
 
-访问 `http://localhost:3000`。部署构建使用：
+访问地址：
+
+- 用户工作台：<http://localhost:3000>
+- 管理后台：<http://localhost:3000/control>
+- Gateway 健康检查：<http://127.0.0.1:8789/health>
+- Harness 健康检查：<http://127.0.0.1:8090/health>
+
+在关闭终端后继续运行：
 
 ```bash
-pnpm build
+pnpm local:daemon:start
+pnpm local:daemon:status
+pnpm local:daemon:stop
 ```
 
-## 部署与配置
+完整飞书应用、lark-cli 授权和配对流程见[本地运行说明](./LOCAL_SETUP.md)。第一次部署服务器请直接阅读[从零部署教程](./docs/DEPLOYMENT_TUTORIAL.md)。
 
-项目使用 Sites / Cloudflare Worker 兼容结构，`.openai/hosting.json` 已声明 D1 绑定 `DB`。实际接入时在托管平台设置：
+## Linux 生产部署
 
-- `OPENAI_API_KEY` 或所选模型厂商密钥
-- `FEISHU_APP_ID`
-- `FEISHU_APP_SECRET`
-- `FEISHU_VERIFICATION_TOKEN`
-- `FEISHU_ENCRYPT_KEY`
+生产环境由 systemd 管理，Web 是唯一对外端口，Gateway 和 Harness 仅监听回环地址。
 
-密钥只存托管平台 Secret，不写入源码。飞书事件回调应指向 `/api/integrations/feishu/events`，生产实现必须完成签名校验、事件去重、快速响应和异步处理。
+| 组件 | 默认位置 | 边界 |
+| --- | --- | --- |
+| Web | `0.0.0.0:3000` | 通过 HTTPS 反向代理对外提供服务 |
+| Gateway | `127.0.0.1:8789` | 只允许本机 Web 与通信适配器访问 |
+| Harness | `127.0.0.1:8090` | 只允许 Gateway 调用 |
+| SQLite | `/srv/pulse/pulse.db` | 保存项目、记忆、Skill 与审计 |
+| Harness Sessions | `/srv/pulse/harness-sessions` | 保存模型会话状态 |
+| Secrets | `/etc/pulse/pulse.env` | 不进入 Git 仓库 |
 
-## DeepSeek Harness Agent
+安装与启动：
 
-项目管理 Agent 采用双层部署：Sites 站点负责 UI、身份与 D1 项目数据；`harness-service/` 是独立 DeepSeek Harness Runtime，负责持久会话、上下文压缩、模型步骤和未来的 MCP 项目工具。站点通过 `HARNESS_API_URL` 与 `HARNESS_SHARED_SECRET` 调用 Runtime。
+```bash
+sudo PULSE_RUN_USER="$USER" bash deploy/linux/bootstrap.sh
+# 编辑 /etc/pulse/pulse.env
+sudo systemctl enable --now pulse
+bash deploy/linux/healthcheck.sh
+```
 
-没有连接 Runtime 时，Agent 页面仍可基于 D1 给出结构化摘要；配置 `LLM_API_KEY` 时也可使用一次性模型降级。只有 Runtime 连接成功后，界面才会显示“Harness 已连接”，不会把普通模型调用伪装成 Harness。
+健康检查必须依次返回 `harness: ok`、`gateway: ok`、`web: ok`。生产机存在未提交改动时应停止更新，数据库和 Secret 必须独立备份，不跟随 Git 覆盖。
 
-Runtime 使用 `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL` 和 `DSH_MODEL`。模型名、网关地址与密钥必须来自同一服务商；不要把凭证写进仓库。当前 Runtime 为只读分析模式，项目写入和飞书发送应在后续通过 MCP 工具与 Harness 审批门禁开放。
+## 管理后台
+
+`/control` 不是展示型仪表盘，而是 Agent 的真实控制面：
+
+- 模型路由、当前模型与请求配置；
+- 每轮输入、输出、Context、Memory 与工具轨迹；
+- 系统提示词草稿、发布和版本历史；
+- Skill 草稿、标签、评测、发布与回滚；
+- 插件、网页搜索和文档能力开关；
+- Session Memory、长期记忆候选和月度审阅；
+- 项目知识库、群聊历史和飞书文档同步；
+- 定时任务、子 Agent 与工具权限审计。
+
+API Key 只从环境变量读取，不进入页面、数据库或运行日志。多人使用时还需要在生产环境补充登录认证、租户隔离和管理员角色控制，不能直接把管理后台裸露到公网。
+
+## 验证
+
+```bash
+CI=true pnpm test
+```
+
+测试覆盖页面构建、飞书事件幂等、群聊权限与历史补采、项目写入闸门、原子 Todo、定时任务、ReAct 工具循环、Hermes Session、长期记忆候选、项目知识召回、Skill 发布治理、网页工具和管理后台渲染。
+
+## 目录
+
+```text
+app/                    Web 工作台、管理后台与 API
+local-runtime/          Gateway、Agent Loop、Tool Runtime、Memory、Scheduler
+harness-service/        DeepSeek Harness 独立模型服务
+db/ + drizzle/          Web / D1 数据模型与迁移
+deploy/linux/           systemd 安装、配置与健康检查
+docs/                   架构、部署与 Skill Review 文档
+integrations/           飞书、OpenClaw 与 DSH 社区插件适配
+scripts/                本地守护、生产启动与插件同步
+```
+
+更完整的模块边界与运行契约见 [Agent 架构说明](./docs/AGENT_ARCHITECTURE.md)。
+
+## 开源边界
+
+仓库不会提交真实 `.env`、API Key、飞书令牌、SQLite 数据库、聊天记录、模型 Session、日志或用户文档。部署前请确认组织允许将相关代码和数据交给所选择的第三方模型及搜索服务。
+
+第三方项目和架构参考见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。安全问题请参考 [SECURITY.md](./SECURITY.md)。
 
 ## License
 
-项目使用 [MIT License](./LICENSE)。第三方项目与架构参考的版权说明见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+[MIT License](./LICENSE)
